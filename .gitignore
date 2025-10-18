@@ -1,0 +1,46 @@
+# General
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+.fleet/
+.history
+*.iml
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+
+# Go build
+bin/
+build/
+dist/
+out/
+target/
+vendor/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Coverage
+coverage/
+coverage.*
+*.coverprofile
+*.cov
+
+# Node (just in case)
+node_modules/
+
+# Project docs to ignore
+TDD.md
+.cursorrules.md
