@@ -75,7 +75,7 @@ Permite (200) ou Bloqueia (429)
 
 ### Pré-requisitos
 
-- **Go 1.21+**
+- **Go 1.23+**
 - **Docker & Docker Compose**
 - **Make** (opcional, mas recomendado)
 
@@ -83,8 +83,8 @@ Permite (200) ou Bloqueia (429)
 
 ```bash
 # 1. Clone o repositório
-git clone https://github.com/seuusuario/rate-limiter.git
-cd rate-limiter
+git clone https://github.com/EuricoCruz/rate_limiter_challeng.git
+cd rate_limiter_challeng
 
 # 2. Configure as variáveis de ambiente
 cp configs/.env.example .env
@@ -110,7 +110,7 @@ curl http://localhost:8080/health
 
 ```bash
 # Adicione ao seu projeto
-go get github.com/seuusuario/rate-limiter
+go get github.com/EuricoCruz/rate_limiter_challeng
 ```
 
 ---
@@ -123,38 +123,68 @@ go get github.com/seuusuario/rate-limiter
 package main
 
 import (
+    "log"
+    "net/http"
+    
     "github.com/go-chi/chi/v5"
-    "github.com/seuusuario/rate-limiter/internal/adapter/http/middleware"
-    "github.com/seuusuario/rate-limiter/internal/adapter/storage/redis"
-    "github.com/seuusuario/rate-limiter/internal/infrastructure/config"
-    infraRedis "github.com/seuusuario/rate-limiter/internal/infrastructure/redis"
-    "github.com/seuusuario/rate-limiter/internal/usecase/check_rate_limit"
+    "github.com/EuricoCruz/rate_limiter_challeng/internal/adapter/http/middleware"
+    redisAdapter "github.com/EuricoCruz/rate_limiter_challeng/internal/adapter/storage/redis"
+    "github.com/EuricoCruz/rate_limiter_challeng/internal/infrastructure/config"
+    infraRedis "github.com/EuricoCruz/rate_limiter_challeng/internal/infrastructure/redis"
+    "github.com/EuricoCruz/rate_limiter_challeng/internal/usecase/check_rate_limit"
 )
+
+// configAdapter adapta config.Config para implementar middleware.Config
+type configAdapter struct {
+    *config.Config
+}
+
+func (c *configAdapter) GetTokenConfig(token string) (middleware.TokenConfig, bool) {
+    cfg, exists := c.Config.GetTokenConfig(token)
+    if !exists {
+        return middleware.TokenConfig{}, false
+    }
+    return middleware.TokenConfig{
+        Limit:     cfg.Limit,
+        Window:    cfg.Window,
+        BlockTime: cfg.BlockTime,
+    }, true
+}
 
 func main() {
     // 1. Carrega configuração
-    cfg, _ := config.Load()
+    cfg, err := config.Load()
+    if err != nil {
+        log.Fatal("Failed to load config:", err)
+    }
     
     // 2. Conecta Redis
-    redisClient, _ := infraRedis.NewClient(cfg)
+    redisClient, err := infraRedis.NewClient(cfg)
+    if err != nil {
+        log.Fatal("Failed to connect to Redis:", err)
+    }
+    defer redisClient.Close()
     
     // 3. Monta as camadas
-    storage := redis.NewRedisStorage(redisClient)
+    storage := redisAdapter.NewRedisStorage(redisClient)
     useCase := check_rate_limit.NewUseCase(storage)
-    rateLimiter := middleware.NewRateLimiterMiddleware(useCase, cfg)
     
-    // 4. Cria seu router
+    // 4. Cria adapter para configurar interface do middleware
+    cfgAdapter := &configAdapter{Config: cfg}
+    rateLimiter := middleware.NewRateLimiterMiddleware(useCase, cfgAdapter)
+    
+    // 5. Cria seu router
     r := chi.NewRouter()
     
-    // 5. ✅ INJETA O MIDDLEWARE (TODAS AS ROTAS)
+    // 6. ✅ INJETA O MIDDLEWARE (TODAS AS ROTAS)
     r.Use(rateLimiter.Handle)
     
-    // 6. Define suas rotas (todas terão rate limiting)
+    // 7. Define suas rotas (todas terão rate limiting)
     r.Get("/api/users", getUsersHandler)
     r.Post("/api/orders", createOrderHandler)
     
-    // 7. Inicia servidor
-    http.ListenAndServe(":8080", r)
+    // 8. Inicia servidor
+    log.Fatal(http.ListenAndServe(":8080", r))
 }
 ```
 
@@ -449,7 +479,7 @@ curl -w "\nStatus: %{http_code}\n" http://localhost:8080/
 
 ```bash
 # Conecta no Redis
-docker-compose exec redis redis-cli
+docker-compose exec rate-limiter-redis redis-cli
 
 # Lista todas as chaves de rate limiting
 127.0.0.1:6379> KEYS rate_limit:*
@@ -478,19 +508,60 @@ docker-compose exec redis redis-cli
 
 ### Load Test com k6
 
+O load test verifica a performance do rate limiter sob carga real e confirma que o bloqueio está funcionando corretamente.
+
+#### Instalação do k6
+
 ```bash
-# 1. Instale k6
 # macOS: brew install k6
 # Linux: sudo apt install k6
 # Windows: choco install k6
+```
+
+#### Executando o Teste
+
+```bash
+# 1. Certifique-se que a aplicação está rodando
+make docker-up
 
 # 2. Rode o load test
-k6 run tests/load/load_test.js
+make load-test
+# ou: k6 run tests/load/load_test.js
+```
 
-# Resultado esperado:
-# ✅ http_req_duration p(95) < 500ms
-# ✅ blocked_requests > 30% (rate limiter funcionando)
-# ✅ throughput: ~10k-50k req/s
+#### O que o Teste Faz
+
+- **100 usuários concorrentes** por 1 minuto (ramp up/down incluído)
+- **90% requests normais** (testam rate limiting por IP)  
+- **10% requests com token** (testam rate limiting por token)
+- **Mede métricas** de performance e bloqueios
+
+#### Resultado Esperado
+
+```
+✓ http_req_duration p(95)<500ms    (95% das requests < 500ms)
+✓ blocked_requests rate>0.3        (>30% das requests bloqueadas)
+✓ throughput                       (~10k-50k req/s)
+```
+
+**Interpretação:**
+- ✅ **p95 < 500ms**: Performance adequada
+- ✅ **blocked_requests > 30%**: Rate limiter está funcionando (bloqueando requests)
+- ✅ **throughput alto**: Sistema não é um gargalo
+
+#### Exemplo de Saída
+
+```
+running (1m30.0s), 000/100 VUs, 8553 complete and 0 interrupted iterations
+default ✓ [=====================================] 100 VUs  1m0s
+
+     ✓ status is 200 or 429
+     ✓ response time < 500ms  
+     ✓ blocked_requests rate>0.3
+
+     blocked_requests: 68.57% (rate)
+     http_req_duration: avg=45ms min=2ms med=25ms max=485ms p(95)=124ms
+     http_req_rate: 95.03 req/s
 ```
 
 ### Teste de Stress
@@ -549,7 +620,7 @@ ab -n 10000 -c 100 http://localhost:8080/
 **Diagnóstico:**
 ```bash
 # 1. Verifica se Redis está rodando
-docker-compose ps redis
+docker-compose ps rate-limiter-redis
 # Status deve ser "Up (healthy)"
 
 # 2. Verifica configuração
@@ -577,7 +648,7 @@ docker-compose logs app | grep "rate limit"
 **Diagnóstico:**
 ```bash
 # 1. Verifica se está bloqueado no Redis
-docker-compose exec redis redis-cli
+docker-compose exec rate-limiter-redis redis-cli
 127.0.0.1:6379> KEYS *:blocked
 # Se retornar chaves, está bloqueado
 
@@ -591,7 +662,7 @@ cat .env | grep IP_RATE_LIMIT
 ```
 
 **Solução:**
-- Limpe Redis: `docker-compose exec redis redis-cli FLUSHDB`
+- Limpe Redis: `docker-compose exec rate-limiter-redis redis-cli FLUSHDB`
 - Aumente `IP_RATE_LIMIT` no .env
 - Reduza `IP_BLOCK_TIME` para testes
 
@@ -629,7 +700,7 @@ docker-compose logs app | grep "token"
 **Diagnóstico:**
 ```bash
 # 1. Verifica se Redis está rodando
-docker-compose ps redis
+docker-compose ps rate-limiter-redis
 
 # 2. Verifica REDIS_HOST no .env
 cat .env | grep REDIS_HOST
@@ -650,7 +721,7 @@ cat .env | grep REDIS_HOST
 **Diagnóstico:**
 ```bash
 # 1. Verifica latência do Redis
-docker-compose exec redis redis-cli --latency
+docker-compose exec rate-limiter-redis redis-cli --latency
 # Deve ser < 1ms
 
 # 2. Verifica se Lua script está otimizado
@@ -694,7 +765,7 @@ docker-compose up -d
 ```bash
 # Conectar no Redis CLI
 make redis-cli
-# ou: docker-compose exec redis redis-cli
+# ou: docker-compose exec rate-limiter-redis redis-cli
 
 # Limpar todos os dados
 redis-cli FLUSHDB
@@ -720,6 +791,10 @@ make test
 
 # Coverage
 make coverage
+
+# Load test (requer k6 instalado)
+make load-test
+# ou: k6 run tests/load/load_test.js
 ```
 
 ---
@@ -729,7 +804,7 @@ make coverage
 Se tiver problemas:
 
 1. **Verifique os logs:** `make logs`
-2. **Limpe o Redis:** `docker-compose exec redis redis-cli FLUSHDB`
+2. **Limpe o Redis:** `docker-compose exec rate-limiter-redis redis-cli FLUSHDB`
 3. **Recrie os containers:** `docker-compose down -v && docker-compose up -d`
 4. **Verifique o .env:** Todas as variáveis obrigatórias estão configuradas?
 
@@ -754,4 +829,4 @@ Para quem vai avaliar o projeto, siga este checklist:
 - [ ] 7. Config: token configurado tem limite diferente de IP
 - [ ] 8. Middleware: código mostra injeção clara do middleware
 - [ ] 9. Testes: `make test` (todos devem passar)
-- [ ] 10. Load test: `k6 run tests/load/load_test.js` (p95 < 500ms)
+- [ ] 10. Load test: `make load-test` (p95 < 500ms, >30% blocked)

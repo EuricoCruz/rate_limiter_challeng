@@ -1,4 +1,4 @@
-.PHONY: help build test test-unit test-integration run docker-up docker-down docker-build logs clean
+.PHONY: help build test test-unit test-integration load-test run docker-up docker-down docker-build logs clean
 
 help: ## Mostra este help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -20,6 +20,11 @@ test-integration: ## Roda testes de integração (precisa Redis)
 	@docker-compose -f docker-compose.test.yml down -v
 
 test: test-unit test-integration ## Roda todos os testes
+
+load-test: ## Roda load test com k6 (precisa k6 instalado e app rodando)
+	@echo "🏋️ Running load test..."
+	@which k6 > /dev/null || (echo "❌ k6 não encontrado. Instale: brew install k6" && exit 1)
+	@k6 run tests/load/load_test.js
 
 run: ## Roda aplicação localmente
 	@echo "🚀 Starting application..."
@@ -47,7 +52,7 @@ logs: ## Mostra logs da aplicação
 	@docker-compose logs -f app
 
 redis-cli: ## Conecta no Redis CLI
-	@docker-compose exec redis redis-cli
+	@docker-compose exec rate-limiter-redis redis-cli
 
 clean: ## Limpa arquivos gerados
 	@echo "🧹 Cleaning..."
