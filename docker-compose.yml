@@ -1,0 +1,71 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: rate-limiter-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - rate-limiter-network
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rate-limiter-app
+    ports:
+      - "8080:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      # Server
+      - SERVER_PORT=8080
+      
+      # Redis (usa nome do service como host)
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - REDIS_DB=0
+      
+      # IP Rate Limiting
+      - IP_RATE_LIMIT=10
+      - IP_RATE_WINDOW=1s
+      - IP_BLOCK_TIME=5m
+      
+      # Token Examples
+      - TOKEN_abc123=abc123
+      - TOKEN_abc123_LIMIT=100
+      - TOKEN_abc123_WINDOW=1s
+      - TOKEN_abc123_BLOCK_TIME=10m
+      
+      - TOKEN_xyz789=xyz789
+      - TOKEN_xyz789_LIMIT=50
+      - TOKEN_xyz789_WINDOW=1s
+      - TOKEN_xyz789_BLOCK_TIME=5m
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - rate-limiter-network
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+    driver: local
+
+networks:
+  rate-limiter-network:
+    driver: bridge
